@@ -219,4 +219,49 @@ with col_summary:
     | **Lệch tâm ngẫu nhiên ($M_{{imp}}$)** | **{round(M_imp_x, 1)} kNm** | **{round(M_imp_y, 1)} kNm** | Hệ số tự động độc lập theo phương |
     | **Mô-men uốn dọc cấp 2 ($M_{{add}}$)** | **{round(M_add_x, 1)} kNm** | **{round(M_add_y, 1)} kNm** | Biến thiên theo độ mảnh phương tương ứng |
     | **Tổng mô-men thiết kế ($M_{{design\_axis}}$)**| **{round(M_x_design, 1)} kNm** | **{round(M_y_design, 1)} kNm** | Khớp mặt cắt đỉnh cột tiết diện |
-    | **Mô
+    | **Mô-men tổng hợp xiên ($M_{{design}}$)** | **{round(M_design_total, 1)} kNm** | — | Vector sum: $\sqrt{{M_x^2 + M_y^2}}$ |
+    | **Góc nghiêng thiết kế ($\theta$)** | **{round(theta_design_deg, 2)}°** | — | Khớp trục phá hủy thực tế |
+    | **Lực dọc thiết kế ($N_{{Ed}}$)** | **{N_Ed} kN** | — | Trục nén thời gian thực |
+    """)
+
+# 5. XUẤT FILE BÁO CÁO PDF CHI TIẾT ĐỒNG BỘ
+def generate_detailed_prokon_pdf():
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=45, leftMargin=45, topMargin=45, bottomMargin=45)
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=15, leading=18, textColor=colors.HexColor('#1B365D'), spaceAfter=10)
+    normal_text = ParagraphStyle('NormT', fontName='Helvetica', fontSize=10, leading=14)
+
+    elements = []
+    elements.append(Paragraph("PROKON Structural Column Verification Sheet", title_style))
+    elements.append(Spacer(1, 10))
+    
+    data_res = [
+        [Paragraph("<b>Parameter Spec</b>", normal_text), Paragraph("<b>Calculated Value</b>", normal_text), Paragraph("<b>Eurocode 2 Compliance</b>", normal_text)],
+        ["Madd X-X (Slenderness)", f"{round(M_add_x, 1)} kNm", "Isolated Axis Additive Only"],
+        ["Madd Y-Y (Slenderness)", f"{round(M_add_y, 1)} kNm", "Isolated Axis Additive Only"],
+        ["Combined Vector M_design", f"{round(M_design_total, 1)} kNm", "Vector Combined Matrix"],
+        ["Ultimate Dynamic Safety Factor", f"{round(calculated_sf, 2)}", "PASS" if is_pass else "FAIL"]
+    ]
+    t_res = Table(data_res, colWidths=[200, 150, 160])
+    t_res.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1B365D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('PADDING', (0,0), (-1,-1), 6),
+    ]))
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+st.markdown("---")
+st.subheader("🖨️ Export PDF Calculation Report")
+pdf_data = generate_detailed_prokon_pdf()
+
+st.download_button(
+    label="📥 Download Calibrated Prokon PDF Report",
+    data=pdf_data,
+    file_name="Prokon_Dynamic_Isolated_Report.pdf",
+    mime="application/pdf"
+)
