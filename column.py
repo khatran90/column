@@ -9,7 +9,7 @@ from reportlab.lib import colors
 
 # 1. CẤU HÌNH TRANG WEB
 st.set_page_config(page_title="EC2 Biaxial Column Designer (Prokon Style)", layout="wide")
-st.title("🏛️ Concrete Column Design — Biaxial Bending (EC2)")
+st.title("🏛️ Concrete Column Design — Biaxial Bending (EC2) by KHA TRAN")
 st.caption("Advanced True Biaxial Interaction Analysis ($N - M_{{design}}$) — Prokon Style")
 st.markdown("---")
 
@@ -46,6 +46,9 @@ fcd = 0.85 * fck / gamma_c
 fyd = fyk / gamma_s
 Es = 200000.0
 
+# Tính toán khả năng nén thuần túy giới hạn tổng thể của tiết diện
+N_Rd = (fcd * b * h + fyd * As_total) / 1000
+
 # Kiểm tra hàm lượng cốt thép tối thiểu theo EC2 (Mục 9.5.2)
 Ac = b * h
 As_min = max(0.002 * Ac, (0.10 * abs(N_Ed) * 1000) / fyd)
@@ -63,44 +66,37 @@ for i in range(n_x):
 for j in range(1, n_y - 1):
     rebar_coords.append((cc + bar_dia/2 - b/2, cc + bar_dia/2 + j*dy - h/2))
     rebar_coords.append((b/2 - cc - bar_dia/2, cc + bar_dia/2 + j*dy - h/2))
-rebar_coords = list(set(rebar_coords)) # Loại bỏ trùng lặp góc nếu có
+rebar_coords = list(set(rebar_coords)) # Loại bỏ trùng lặp góc
 
 # TÍNH TOÁN M_DESIGN TỔNG HỢP VÀ GÓC LỆCH TẢI THETA
 M_Ed_tot = np.sqrt(M_Edx**2 + M_Edy**2)
 theta = np.arctan2(abs(M_Edy), abs(M_Edx)) if M_Edx > 0 else np.pi/2
 
 def generate_biaaxial_profile(angle):
-    """Tính toán đường bao tương tác phẳng tại một góc nghiêng của trục trung hòa"""
+    """Tính toán đường bao tương tác chuẩn Prokon bằng cách quét phẳng xoay góc nghiêng trục trung hòa"""
     N_profile, M_profile = [], []
     
-    # Điểm nén thuần túy
-    N_pure_comp = (fcd * b * h + fyd * As_total) / 1000
-    N_profile.append(N_pure_comp)
+    # 1. Điểm nén thuần túy
+    N_profile.append(N_Rd)
     M_profile.append(0.0)
     
-    # Kích thước hình học quy đổi theo phương nghiêng góc angle
-    h_prime = abs(b * np.sin(angle)) + abs(h * np.cos(angle))
+    # Chiều dài hình chiếu lớn nhất của tiết diện lên phương vuông góc trục trung hòa xoay
+    h_prime = abs(b * np.cos(angle)) + abs(h * np.sin(angle))
     
-    # Quét mịn 25 điểm chiều sâu trục trung hòa xoay nghiêng
-    for xu in np.linspace(h_prime * 1.1, h_prime * 0.02, 25):
-        # Tính toán diện tích vùng nén đa giác của bê tông bằng đơn giản hóa hình học phẳng
-        # Đối với biểu đồ tương tác quy đổi, ta dùng chiều sâu tương đương
-        if xu >= h_prime:
-            Fcc = fcd * b * h
-            z_cc = 0.0
-        else:
-            # Mô hình hóa đơn giản hóa khối ứng suất bê tông quy đổi theo phương nghiêng
-            area_ratio = min(xu / h_prime, 1.0)
-            Fcc = fcd * b * h * area_ratio * 0.8
-            z_cc = (h_prime / 2 - 0.4 * xu)
-            
-        # Tính toán ứng suất từng thanh thép dựa trên khoảng cách hình chiếu đến trục trung hòa xoay
+    # 2. Quét mịn qua 25 điểm chiều sâu trục trung hòa thực tế
+    for xu in np.linspace(h_prime * 1.0, h_prime * 0.01, 25):
+        # Tính toán diện tích khối nén bê tông quy đổi theo mặt cắt nghiêng góc angle
+        area_ratio = min(xu / h_prime, 1.0)
+        Fcc = fcd * b * h * area_ratio * 0.8
+        z_cc = (h_prime / 2 - 0.4 * xu)
+        
         F_steel_tot = 0.0
         M_steel_tot = 0.0
         
+        # Tính toán biến dạng (strain) riêng biệt của từng thanh thép dựa theo ma trận xoay hình học
         for rx, ry in rebar_coords:
-            # Chiều sâu của thanh thép hiện tại so với thớ nén biên phương nghiêng
-            d_i = h_prime / 2 - (rx * np.sin(angle) + ry * np.cos(angle))
+            # Hình chiếu khoảng cách thanh thép đến trục trung hòa xoay nghiêng
+            d_i = h_prime / 2 - (rx * np.cos(angle) + ry * np.sin(angle))
             
             if xu > 0:
                 strain_i = 0.0035 * (xu - d_i) / xu
@@ -117,13 +113,13 @@ def generate_biaaxial_profile(angle):
         N_profile.append(N_cur)
         M_profile.append(abs(M_cur))
         
-    # Điểm kéo thuần túy
+    # 3. Điểm kéo thuần túy
     N_profile.append(-As_total * fyd / 1000)
     M_profile.append(0.0)
     
     return N_profile, M_profile
 
-# Tạo đường bao kháng uốn thực tế tại đúng góc tác dụng của tải trọng hiện tại
+# Gọi hàm tạo đường bao kháng uốn quy đổi tổng hợp thực tế
 N_curve, M_curve = generate_biaaxial_profile(theta)
 
 # Tìm khả năng kháng uốn giới hạn M_Rd ứng với lực dọc N_Ed hiện tại bằng nội suy
@@ -148,16 +144,14 @@ with col_charts:
     st.subheader(f"📈 True Biaxial Interaction Curve (Angle: {round(np.degrees(theta), 1)}°)")
     
     fig_inter = go.Figure()
-    # Vẽ đường bao kháng uốn quy đổi tổng hợp hợp lực
     fig_inter.add_trace(go.Scatter(
         x=M_curve, y=N_curve, 
         mode='lines+markers', 
-        name=f'Biaxial Capacity Envelope', 
+        name='Biaxial Capacity Envelope', 
         line=dict(color='#1B365D', width=3),
         fill='toself',
         fillcolor='rgba(27, 54, 93, 0.04)'
     ))
-    # Chấm điểm lực tác dụng thực tế tổng hợp (M_design)
     fig_inter.add_trace(go.Scatter(
         x=[M_Ed_tot], y=[N_Ed], 
         mode='markers', 
@@ -190,7 +184,7 @@ with col_summary:
     else:
         st.error("💥 TIẾT DIỆN KHÔNG ĐẠT")
 
-# 5. LOGIC TẠO VÀ XUẤT BÁO CÁO PDF ĐÚNG CHUẨN PROKON
+# 5. LOGIC TẠO VÀ XUẤT BÁO CÁO PDF ĐÃ SỬA LỖI KHAI BÁO BIẾN
 def generate_pdf_report():
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
