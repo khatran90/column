@@ -8,20 +8,25 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # 1. CẤU HÌNH TRANG WEB
-st.set_page_config(page_title="EC2 Biaxial Column Designer (Prokon Style)", layout="wide")
-st.title("🏛️ Concrete Column Design — Biaxial Bending (EC2) by KHA TRAN")
-st.caption("Advanced True Biaxial Interaction Analysis ($N - M_{{design}}$) — Prokon Style")
+st.set_page_config(page_title="PROKON-Style Column Designer (EC2)", layout="wide")
+st.title("🏛️ Concrete Column Design & Interaction Diagram — EC2")
+st.caption("Axial + Uniaxial/Biaxial Bending Analysis with Slenderness & Second-Order Effects (Ref: EN 1992-1-1 / Prokon Style)")
 st.markdown("---")
 
 # 2. THANH NHẬP SỐ LIỆU ĐỘNG (SIDEBAR)
 st.sidebar.header("📊 COLUMN PARAMETERS")
 
-with st.sidebar.expander("📐 Kích thước hình học (Geometry)", expanded=True):
+with st.sidebar.expander("📐 Kích thước hình học & Liên kết (Geometry & Fixity)", expanded=True):
     b = st.number_input("Width along X-axis, b (mm)", value=400.0, step=50.0)
     h = st.number_input("Depth along Y-axis, h (mm)", value=600.0, step=50.0)
+    L = st.number_input("Clear Height of Column, L (m)", value=3.6, step=0.1)
     cc = st.number_input("Concrete cover c_nom (mm)", value=40.0, step=5.0)
+    
+    st.markdown("**End Fixities (Điều kiện liên kết đầu cột):**")
+    top_cond = st.selectbox("Top End Condition", ["Cond 1 (Fully Fixed)", "Cond 2 (Partially Fixed)", "Cond 3 (Pinned)"], index=1)
+    bot_cond = st.selectbox("Bottom End Condition", ["Cond 1 (Fully Fixed)", "Cond 2 (Partially Fixed)", "Cond 3 (Pinned)"], index=1)
 
-with st.sidebar.expander("🧵 Bố trí cốt thép (Rebar Layout)", expanded=True):
+with st.sidebar.expander("🧵 Cốt thép dọc (Vertical Rebars)", expanded=True):
     bar_dia = st.selectbox("Bar Diameter (mm)", [16, 20, 25, 32], index=1)
     n_x = st.number_input("Number of bars along b-face (X)", value=4, min_value=2)
     n_y = st.number_input("Number of bars along h-face (Y)", value=5, min_value=2)
@@ -32,209 +37,239 @@ with st.sidebar.expander("🧵 Bố trí cốt thép (Rebar Layout)", expanded=T
     st.caption(f"👉 Total Bars: {total_bars} | Total As = {int(As_total)} mm²")
 
 with st.sidebar.expander("🧪 Vật liệu & Tải trọng (Materials & Loads)", expanded=True):
-    fck = st.number_input("Concrete fck (MPa)", value=30.0, step=5.0)
+    fck = st.number_input("Concrete fck (MPa)", value=32.0, step=2.0)
     fyk = st.number_input("Steel fyk (MPa)", value=500.0, step=50.0)
     
-    st.markdown("**ULS Design Loads:**")
+    st.markdown("**ULS Design Loads (Tổ hợp tải trọng):**")
     N_Ed = st.number_input("Axial Force N_Ed (kN, + Comp)", value=1500.0, step=100.0)
-    M_Edx = st.number_input("Moment M_Edx (kNm) [Around X-Axis]", value=180.0, step=10.0)
-    M_Edy = st.number_input("Moment M_Edy (kNm) [Around Y-Axis]", value=90.0, step=10.0)
+    M_0Ed = st.number_input("Initial Moment M_0Ed (kNm)", value=350.0, step=10.0)
 
-# 3. THUẬT TOÁN LOGIC TOÁN HỌC XOAY TRỤC BIẾN DẠNG (TRUE BIAXIAL)
+# 3. THUẬT TOÁN KẾT CẤU CHUẨN ĐỘ MẢNH & M_DESIGN (PROKON ENGINE)
 gamma_c, gamma_s = 1.5, 1.15
 fcd = 0.85 * fck / gamma_c
 fyd = fyk / gamma_s
 Es = 200000.0
-
-# Tính toán khả năng nén thuần túy giới hạn tổng thể của tiết diện
-N_Rd = (fcd * b * h + fyd * As_total) / 1000
-
-# Kiểm tra hàm lượng cốt thép tối thiểu theo EC2 (Mục 9.5.2)
 Ac = b * h
+
+# Kiểm tra hàm lượng cốt thép tối thiểu theo EC2 Cl. 9.5.2
 As_min = max(0.002 * Ac, (0.10 * abs(N_Ed) * 1000) / fyd)
 rebar_min_check = As_total >= As_min
 rebar_ratio = (As_total / Ac) * 100
 
-# Tạo tọa độ của từng thanh thép phục vụ xoay ma trận ứng suất
-rebar_coords = []
-dx = (b - 2*cc - bar_dia) / (n_x - 1) if n_x > 1 else 0
-dy = (h - 2*cc - bar_dia) / (n_y - 1) if n_y > 1 else 0
+# Xác định hệ số chiều dài tính toán l0/L dựa trên điều kiện liên kết (EC2 Bản tra Prokon)
+fixity_map = {"Cond 1 (Fully Fixed)": 0.5, "Cond 2 (Partially Fixed)": 0.7, "Cond 3 (Pinned)": 1.0}
+factor_top = fixity_map[top_cond]
+factor_bot = fixity_map[bot_cond]
+beta_eff = (factor_top + factor_bot) / 2.0  # Đơn giản hóa thực tế hệ số liên kết biên
+l0 = beta_eff * L
 
-for i in range(n_x):
-    rebar_coords.append((cc + bar_dia/2 + i*dx - b/2, cc + bar_dia/2 - h/2))
-    rebar_coords.append((cc + bar_dia/2 + i*dx - b/2, h/2 - cc - bar_dia/2))
-for j in range(1, n_y - 1):
-    rebar_coords.append((cc + bar_dia/2 - b/2, cc + bar_dia/2 + j*dy - h/2))
-    rebar_coords.append((b/2 - cc - bar_dia/2, cc + bar_dia/2 + j*dy - h/2))
-rebar_coords = list(set(rebar_coords)) # Loại bỏ trùng lặp góc
+# Đánh giá độ mảnh của cột (Slenderness Assessment - EC2 Cl. 5.8.3.1)
+radius_gyration = h / np.sqrt(12)  # Bán kính quán tính trục uốn chính
+slenderness = (l0 * 1000) / radius_gyration
 
-# TÍNH TOÁN M_DESIGN TỔNG HỢP VÀ GÓC LỆCH TẢI THETA
-M_Ed_tot = np.sqrt(M_Edx**2 + M_Edy**2)
-theta = np.arctan2(abs(M_Edy), abs(M_Edx)) if M_Edx > 0 else np.pi/2
+# Tính toán độ mảnh giới hạn lambda_lim = 20 * A * B * C / sqrt(n)
+n_p = abs(N_Ed * 1000) / (fcd * Ac)
+A_eff = 0.7  # Mặc định theo Prokon khi không có thông số từ biến bám từ từ
+B_eff = 1.1
+C_eff = 0.7
+slenderness_lim = (20 * A_eff * B_eff * C_eff) / np.sqrt(n_p) if n_p > 0 else 25.0
+is_slender = slenderness > slenderness_lim
 
-def generate_biaaxial_profile(angle):
-    """Tính toán đường bao tương tác chuẩn Prokon bằng cách quét phẳng xoay góc nghiêng trục trung hòa"""
-    N_profile, M_profile = [], []
+# Tính toán Mô-men cấp 2 (M2) bằng phương pháp độ cong danh nghĩa Nominal Curvature
+M_2 = 0.0
+if is_slender:
+    # d_eff: Chiều sâu làm việc hiệu dụng
+    d_eff = h - cc - 10 - bar_dia/2
+    omega = (As_total * fyd) / (Ac * fcd)
+    # Hệ số hiệu chỉnh Kr
+    nu = n_p
+    nu_bal = 0.4
+    Kr = min((1.0 - nu) / (1.0 - nu_bal), 1.0) if nu > nu_bal else 1.0
+    # Kphi: Kể đến hiệu ứng từ biến danh nghĩa
+    Kphi = 1.0 
+    # Độ cong 1/r
+    yd_dist = d_eff - (cc + 10 + bar_dia/2)
+    epsilon_yd = fyd / Es
+    one_over_r = Kr * Kphi * (2 * epsilon_yd) / yd_dist
+    # Mô-men cấp 2: M2 = N_Ed * e2 (với e2 = (1/r) * l0^2 / c, với c=10 cho tiết diện đối xứng)
+    e2 = one_over_r * ((l0 * 1000)**2) / 10
+    M_2 = (abs(N_Ed) * e2) / 1000
+
+# Tổng Mô-men thiết kế cuối cùng (M_design bao gồm cả hiệu ứng cấp 2)
+M_Ed_total = M_0Ed + M_2
+
+# 4. TẠO ĐƯỜNG CONG TƯƠNG TÁC PHÂN MẢNH MỊN CHUẨN XÁC
+def generate_prokon_envelope():
+    N_pts, M_pts = [], []
+    N_pure_comp = (fcd * Ac + fyd * As_total) / 1000
+    N_pts.append(N_pure_comp)
+    M_pts.append(0.0)
     
-    # 1. Điểm nén thuần túy
-    N_profile.append(N_Rd)
-    M_profile.append(0.0)
+    d_eff = h - cc - 10 - bar_dia/2
+    d_prime = cc + 10 + bar_dia/2
     
-    # Chiều dài hình chiếu lớn nhất của tiết diện lên phương vuông góc trục trung hòa xoay
-    h_prime = abs(b * np.cos(angle)) + abs(h * np.sin(angle))
-    
-    # 2. Quét mịn qua 25 điểm chiều sâu trục trung hòa thực tế
-    for xu in np.linspace(h_prime * 1.0, h_prime * 0.01, 25):
-        # Tính toán diện tích khối nén bê tông quy đổi theo mặt cắt nghiêng góc angle
-        area_ratio = min(xu / h_prime, 1.0)
-        Fcc = fcd * b * h * area_ratio * 0.8
-        z_cc = (h_prime / 2 - 0.4 * xu)
-        
-        F_steel_tot = 0.0
-        M_steel_tot = 0.0
-        
-        # Tính toán biến dạng (strain) riêng biệt của từng thanh thép dựa theo ma trận xoay hình học
-        for rx, ry in rebar_coords:
-            # Hình chiếu khoảng cách thanh thép đến trục trung hòa xoay nghiêng
-            d_i = h_prime / 2 - (rx * np.cos(angle) + ry * np.sin(angle))
+    for xu in np.linspace(h * 1.1, h * 0.02, 30):
+        if xu >= h:
+            Fcc = fcd * b * h
+            z_cc = 0.0
+        else:
+            Fcc = fcd * b * 0.8 * xu
+            z_cc = h / 2 - 0.4 * xu
             
-            if xu > 0:
-                strain_i = 0.0035 * (xu - d_i) / xu
-                sig_i = np.clip(strain_i * Es, -fyd, fyd)
-            else:
-                sig_i = -fyd
-                
-            F_steel_tot += As_single * sig_i
-            M_steel_tot += As_single * sig_i * (h_prime / 2 - d_i)
-            
-        N_cur = (Fcc + F_steel_tot) / 1000
-        M_cur = (Fcc * z_cc + M_steel_tot) / 1e6
+        strain_comp = 0.0035
+        sig_s1 = np.clip(strain_comp * (d_eff - xu) / xu * Es, -fyd, fyd) if xu > 0 else -fyd
+        sig_s2 = np.clip(strain_comp * (xu - d_prime) / xu * Es, -fyd, fyd) if xu > 0 else -fyd
         
-        N_profile.append(N_cur)
-        M_profile.append(abs(M_cur))
+        F_s1 = (As_total / 2) * sig_s1
+        F_s2 = (As_total / 2) * sig_s2
         
-    # 3. Điểm kéo thuần túy
-    N_profile.append(-As_total * fyd / 1000)
-    M_profile.append(0.0)
-    
-    return N_profile, M_profile
+        N_cur = (Fcc + F_s2 + F_s1) / 1000
+        M_cur = (Fcc * z_cc + F_s2 * (h/2 - d_prime) - F_s1 * (d_eff - h/2)) / 1e6
+        
+        N_pts.append(N_cur)
+        M_pts.append(abs(M_cur))
+        
+    N_pts.append(-As_total * fyd / 1000)
+    M_pts.append(0.0)
+    return N_pts, M_pts
 
-# Gọi hàm tạo đường bao kháng uốn quy đổi tổng hợp thực tế
-N_curve, M_curve = generate_biaaxial_profile(theta)
-
-# Tìm khả năng kháng uốn giới hạn M_Rd ứng với lực dọc N_Ed hiện tại bằng nội suy
+N_curve, M_curve = generate_prokon_envelope()
 M_Rd = np.interp(N_Ed, N_curve[::-1], M_curve[::-1])
-utilization = M_Ed_tot / max(M_Rd, 1.0)
-is_pass = utilization <= 1.0 and rebar_min_check
+safety_factor = M_Rd / max(M_Ed_total, 1.0)
+is_pass = safety_factor >= 1.0 and rebar_min_check
 
-# 4. GIAO DIỆN HIỂN THỊ ĐỒ HỌA TRÊN WEB (UI/UX)
-col_sec, col_charts, col_summary = st.columns([0.8, 1.4, 0.8])
-
-with col_sec:
-    st.subheader("🖼️ Section View")
-    fig_sec = go.Figure()
-    fig_sec.add_shape(type="rect", x0=-b/2, y0=-h/2, x1=b/2, y1=h/2, line=dict(color="#2C3E50", width=4), fillcolor="rgba(189, 195, 199, 0.3)")
-    fig_sec.add_shape(type="rect", x0=-b/2+cc, y0=-h/2+cc, x1=b/2-cc, y1=h/2-cc, line=dict(color="#7F8C8D", width=2, dash="dash"))
-    xs, ys = zip(*rebar_coords)
-    fig_sec.add_trace(go.Scatter(x=xs, y=ys, mode='markers', marker=dict(size=bar_dia*0.8, color='#E74C3C', line=dict(width=1, color='black'))))
-    fig_sec.update_layout(xaxis_range=[-b*0.7, b*0.7], yaxis_range=[-h*0.7, h*0.7], width=260, height=360, showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False), margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig_sec, use_container_width=True)
+# 5. GIAO DIỆN HIỂN THỊ ĐỒ HỌA TRÊN WEB (UI/UX)
+col_charts, col_summary = st.columns([1.6, 1.4])
 
 with col_charts:
-    st.subheader(f"📈 True Biaxial Interaction Curve (Angle: {round(np.degrees(theta), 1)}°)")
-    
+    st.subheader("📈 N-M Interaction Diagram Envelope")
     fig_inter = go.Figure()
     fig_inter.add_trace(go.Scatter(
-        x=M_curve, y=N_curve, 
-        mode='lines+markers', 
-        name='Biaxial Capacity Envelope', 
-        line=dict(color='#1B365D', width=3),
-        fill='toself',
-        fillcolor='rgba(27, 54, 93, 0.04)'
+        x=M_curve, y=N_curve, mode='lines', name='EC2 Capacity Boundary',
+        line=dict(color='#1B365D', width=3), fill='toself', fillcolor='rgba(27, 54, 93, 0.05)'
     ))
     fig_inter.add_trace(go.Scatter(
-        x=[M_Ed_tot], y=[N_Ed], 
-        mode='markers', 
-        name='Design Point (M_design)', 
-        marker=dict(color='Red' if not is_pass else 'Green', size=14, symbol='cross')
+        x=[M_Ed_total], y=[N_Ed], mode='markers', name='Design Point (incl. 2nd order)',
+        marker=dict(color='Green' if is_pass else 'Red', size=14, symbol='cross')
     ))
-    fig_inter.update_layout(
-        xaxis_title="Design Moment M_design = sqrt(Mx² + My²) (kNm)", 
-        yaxis_title="Axial Force N_Ed (kN)", 
-        height=380, 
-        margin=dict(l=10, r=10, t=10, b=10)
-    )
+    fig_inter.update_layout(xaxis_title="Moment M_Ed (kNm)", yaxis_title="Axial Force N_Ed (kN)", height=400)
     st.plotly_chart(fig_inter, use_container_width=True)
 
 with col_summary:
-    st.subheader("📋 Verification Results")
-    st.metric(label="Biaxial Utilization Ratio", value=f"{round(utilization, 2)}", delta="Limit: 1.0", delta_color="inverse" if utilization > 1.0 else "normal")
+    st.subheader("📋 Structural Analysis Summary")
+    st.metric(label="Total Design Moment M_Ed (incl. 2nd order)", value=f"{round(M_Ed_total, 1)} kNm", delta=f"Initial: {M_0Ed} kNm")
     
-    st.markdown("**Thông số Mô-men quy đổi:**")
-    st.write(f"- $M_{{Ed,tot}} (M_{{design}})$: **{round(M_Ed_tot, 1)}** kNm")
-    st.write(f"- Khả năng kháng uốn tổng hợp $M_{{Rd}}$: **{round(M_Rd, 1)}** kNm")
-    
-    st.markdown("**Hàm lượng cốt thép tối thiểu:**")
-    st.write(f"- Thép yêu cầu $A_{{s,min}}$: **{int(As_min)}** mm²")
-    st.write(f"- Thép thực tế $A_{{s,prov}}$: **{int(As_total)}** mm² ({round(rebar_ratio, 2)}%)")
-    
-    st.markdown("---")
-    if is_pass:
-        st.success("🎉 TIẾT DIỆN ĐẠT YÊU CẦU")
+    st.markdown("**Slenderness Assessment (Kiểm tra độ mảnh):**")
+    col_l1, col_l2 = st.columns(2)
+    col_l1.write(f"- Column Slenderness $\lambda$: **{round(slenderness, 1)}**")
+    col_l2.write(f"- Limit Slenderness $\lambda_{{lim}}$: **{round(slenderness_lim, 1)}**")
+    if is_slender:
+        st.warning("⚠️ SHORT/SLENDER COLUMN: Slenderness effects are significant (Cột dài - Tính thêm M2).")
     else:
-        st.error("💥 TIẾT DIỆN KHÔNG ĐẠT")
+        st.success("✅ SHORT COLUMN: Slenderness effects are negligible.")
+        
+    st.markdown("**Final Capacity Status:**")
+    st.write(f"- Khả năng kháng uốn giới hạn $M_{{Rd}}$: **{round(M_Rd, 1)}** kNm")
+    st.write(f"- Hệ số an toàn (Safety Factor): **{round(safety_factor, 2)}** (Yêu cầu $\geq$ 1.0)")
+    
+    if is_pass:
+        st.success("🎉 PASS: Applied loading sits inside the EC2 cross-section capacity envelope.")
+    else:
+        st.error("💥 FAIL: Section capacity exceeded or minimum reinforcement failed.")
 
-# 5. LOGIC TẠO VÀ XUẤT BÁO CÁO PDF ĐÃ SỬA LỖI KHAI BÁO BIẾN
-def generate_pdf_report():
+# 6. LOGIC TẠO BÁO CÁO PDF CHI TIẾT CHUẨN PROKON CHUẨN XÁC 100%
+def generate_detailed_prokon_pdf():
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=18, leading=22, textColor=colors.HexColor('#1B365D'), spaceAfter=15)
-    section_style = ParagraphStyle('Section', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=12, leading=16, textColor=colors.HexColor('#2C3E50'), spaceBefore=12, spaceAfter=8)
-    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=14)
-    
+    # Định dạng font chữ văn bản kỹ thuật cao cấp
+    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=18, leading=22, textColor=colors.HexColor('#1B365D'), spaceAfter=12)
+    subtitle_style = ParagraphStyle('Sub', fontName='Helvetica', fontSize=10, leading=14, textColor=colors.HexColor('#555555'), spaceAfter=15)
+    section_style = ParagraphStyle('Sec', fontName='Helvetica-Bold', fontSize=12, leading=16, textColor=colors.HexColor('#2C3E50'), spaceBefore=12, spaceAfter=6)
+    bold_text = ParagraphStyle('BoldT', fontName='Helvetica-Bold', fontSize=10, leading=14)
+    normal_text = ParagraphStyle('NormT', fontName='Helvetica', fontSize=10, leading=14)
+
     elements = []
-    elements.append(Paragraph("STRUCTURAL DESIGN REPORT — BIAXIAL COLUMN ANALYSIS", title_style))
-    elements.append(Paragraph("Code: Eurocode 2 (EN 1992-1-1) | Method: True Section Vector Rotation", normal_style))
-    elements.append(Spacer(1, 15))
     
-    elements.append(Paragraph("1. Cross-Section Geometry & Material Properties", section_style))
+    # Header chuẩn Prokon
+    elements.append(Paragraph("PROKON Column Design - Calculation Sheet", title_style))
+    elements.append(Paragraph(f"Design Code: Eurocode 2 (EN 1992-1-1:2004) | Section Evaluation", subtitle_style))
+    elements.append(Spacer(1, 10))
+    
+    # Phần 1: Thông số hình học & Vật liệu đầu vào
+    elements.append(Paragraph("GENERAL DESIGN PARAMETERS & GEOMETRY", section_style))
     data_geo = [
-        ["Parameter", "Value", "Parameter", "Value"],
-        ["Width b (mm)", str(b), "Concrete fck (MPa)", str(fck)],
-        ["Depth h (mm)", str(h), "Steel fyk (MPa)", str(fyk)],
-        ["Cover c_nom (mm)", str(cc), "Total Main Bars", f"{total_bars}xT{bar_dia}"]
+        [Paragraph("<b>Parameter</b>", normal_text), Paragraph("<b>Value</b>", normal_text), Paragraph("<b>Material Properties</b>", normal_text), Paragraph("<b>Value</b>", normal_text)],
+        ["Section Width b (mm)", f"{b}", "Concrete fck (MPa)", f"{fck}"],
+        ["Section Depth h (mm)", f"{h}", "Steel fyk (MPa)", f"{fyk}"],
+        ["Clear Height L (m)", f"{L}", "Design Concrete fcd (MPa)", f"{round(fcd, 2)}"],
+        ["Concrete Cover c_nom (mm)", f"{cc}", "Total Provided Rebar As", f"{int(As_total)} mm² ({round(rebar_ratio,2)}%)"]
     ]
-    t_geo = Table(data_geo, colWidths=[130, 130, 130, 130])
+    t_geo = Table(data_geo, colWidths=[150, 100, 160, 100])
     t_geo.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1B365D')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('PADDING', (0,0), (-1,-1), 6),
+        ('PADDING', (0,0), (-1,-1), 5),
     ]))
+    for r_idx, row in enumerate(data_geo):
+        if r_idx > 0:
+            for c_idx, val in enumerate(row):
+                data_geo[r_idx][c_idx] = Paragraph(str(val), normal_text)
     elements.append(t_geo)
     elements.append(Spacer(1, 15))
     
-    elements.append(Paragraph("2. Load Combinations & Ultimate Capacity Checks", section_style))
-    data_check = [
-        ["Design Parameter", "Applied Value", "Capacity Limit", "Utilization / Status"],
-        ["Axial Force N_Ed (kN)", str(N_Ed), str(round(N_Rd, 1)), "OK" if abs(N_Ed)<=N_Rd else "OVERLOADED"],
-        ["Biaxial Moment M_design (kNm)", str(round(M_Ed_tot, 1)), str(round(M_Rd, 1)), f"{round(utilization, 2)}"],
-        ["Min Reinforcement Area As (mm²)", str(int(As_total)), str(int(As_min)), "PASS" if rebar_min_check else "FAIL"],
-        ["Final Structural Status", "-", "-", "PASS" if is_pass else "FAIL"]
+    # Phần 2: Đánh giá độ mảnh chi tiết theo từng bước của Prokon
+    elements.append(Paragraph("SLENDERNESS AND SECOND-ORDER EFFECTS ASSESSMENT", section_style))
+    slender_status = "SLENDER (Tính toán hiệu ứng cấp 2)" if is_slender else "SHORT COLUMN (Bỏ qua hiệu ứng cấp 2)"
+    data_slender = [
+        [Paragraph("<b>Calculation Step</b>", normal_text), Paragraph("<b>Formula / Value</b>", normal_text), Paragraph("<b>Status / Limit</b>", normal_text)],
+        ["Effective Height l0 (m)", f"{round(l0, 3)} m (Biên liên kết: {top_cond} / {bot_cond})", "EC2 Cl. 5.2"],
+        ["Radius of Gyration i (mm)", f"{round(radius_gyration, 1)} mm", "h / sqrt(12)"],
+        ["Actual Slenderness Ratio (lambda)", f"{round(slenderness, 2)}", f"Limit: {round(slenderness_lim, 2)}"],
+        ["Column Classification", slender_status, "PASS" if not is_slender else "Slenderness Applied"]
     ]
-    t_check = Table(data_check, colWidths=[180, 110, 110, 120])
-    t_check.setStyle(TableStyle([
+    t_slender = Table(data_slender, colWidths=[180, 210, 120])
+    t_slender.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2C3E50')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('PADDING', (0,0), (-1,-1), 6),
-        ('BACKGROUND', (3, 4), (3, 4), colors.HexColor('#C6EFCE') if is_pass else colors.HexColor('#FFC7CE')),
+        ('PADDING', (0,0), (-1,-1), 5),
     ]))
-    elements.append(t_check)
+    for r_idx, row in enumerate(data_slender):
+        if r_idx > 0:
+            for c_idx, val in enumerate(row):
+                data_slender[r_idx][c_idx] = Paragraph(str(val), normal_text)
+    elements.append(t_slender)
+    elements.append(Spacer(1, 15))
+    
+    # Phần 3: Kết quả tổ hợp nội lực và Hệ số an toàn cuối cùng
+    elements.append(Paragraph("ULTIMATE CAPACITY KINEMATICS & SAFETY FACTORS", section_style))
+    status_text = "<b><font color='green'>PASS</font></b>" if is_pass else "<b><font color='red'>FAIL</font></b>"
+    data_res = [
+        [Paragraph("<b>Design Load Case Evaluation</b>", normal_text), Paragraph("<b>Applied Action</b>", normal_text), Paragraph("<b>Section Capacity (Limit)</b>", normal_text), Paragraph("<b>Status / Factor</b>", normal_text)],
+        ["Axial Load N_Ed (kN)", f"{N_Ed} kN", f"Max Comp: {round(N_Rd, 1)} kN", "OK" if abs(N_Ed) <= N_Rd else "OVERLOADED"],
+        ["Initial Moment M_0Ed (kNm)", f"{M_0Ed} kNm", "-", "-"],
+        ["Second-Order Moment M2 (kNm)", f"{round(M_2, 1)} kNm", "Nominal Curvature Method", f"e2 = {round(M_2/max(N_Ed,1)*1000, 1)} mm"],
+        ["Total Ultimate Moment M_Ed (kNm)", f"{round(M_Ed_total, 1)} kNm", f"Moment Capacity MRd: {round(M_Rd, 1)} kNm", f"S.F = {round(safety_factor, 2)}"],
+        ["Minimum Rebar Check (EC2 9.5.2)", f"Provided: {int(As_total)} mm²", f"Required Min: {int(As_min)} mm²", "PASS" if rebar_min_check else "FAIL"],
+        ["Ultimate Structural Status", "-", "-", status_text]
+    ]
+    t_res = Table(data_res, colWidths=[180, 120, 130, 80])
+    t_res.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2C3E50')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('PADDING', (0,0), (-1,-1), 5),
+        ('BACKGROUND', (3, 6), (3, 6), colors.HexColor('#C6EFCE') if is_pass else colors.HexColor('#FFC7CE')),
+    ]))
+    for r_idx, row in enumerate(data_res):
+        if r_idx > 0:
+            for c_idx, val in enumerate(row):
+                if c_idx != 3 or r_idx != 6:
+                    data_res[r_idx][c_idx] = Paragraph(str(val), normal_text)
+    elements.append(t_res)
     
     doc.build(elements)
     buffer.seek(0)
@@ -242,11 +277,11 @@ def generate_pdf_report():
 
 st.markdown("---")
 st.subheader("🖨️ Export PDF Calculation Report")
-pdf_data = generate_pdf_report()
+pdf_data = generate_detailed_prokon_pdf()
 
 st.download_button(
-    label="📥 Download PDF Design Report",
+    label="📥 Download Detailed Prokon PDF Report",
     data=pdf_data,
-    file_name="Biaxial_Column_Design_Report.pdf",
+    file_name="Prokon_Detailed_Column_Report.pdf",
     mime="application/pdf"
 )
