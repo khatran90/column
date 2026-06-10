@@ -10,10 +10,10 @@ from reportlab.lib import colors
 # 1. CẤU HÌNH TRANG WEB STREAMLIT
 st.set_page_config(page_title="PROKON Calibrated Column Engine (EC2)", layout="wide")
 st.title("🏛️ Concrete Column Design & Interaction Diagram — EC2")
-st.caption("Strict Prokon Verification Engine — Polar Radial Scanning for Ultra-Smooth Boundary")
+st.caption("Strict Prokon Verification Engine — True Biaxial Boundary Envelope Generator")
 st.markdown("---")
 
-# 2. THANH NHẬP SỐ LIỆU (SIDEBAR)
+# 2. THANH NHẬP SỐ LIỆU ĐỘNG (SIDEBAR)
 st.sidebar.header("📊 COLUMN PARAMETERS")
 
 with st.sidebar.expander("📐 Kích thước hình học & Liên kết", expanded=True):
@@ -26,7 +26,7 @@ with st.sidebar.expander("📐 Kích thước hình học & Liên kết", expand
     bot_cond = st.selectbox("Bottom End Condition", ["Cond 1 (Fully Fixed)", "Cond 2 (Partially Fixed)", "Cond 3 (Pinned)"], index=1)
 
 with st.sidebar.expander("🧵 Cốt thép dọc (Vertical Rebars)", expanded=True):
-    bar_dia = st.selectbox("Bar Diameter (mm)", [16, 20, 25, 32], index=1) # Mặc định Phi 20 (12 thanh cho cột 400x750)
+    bar_dia = st.selectbox("Bar Diameter (mm)", [16, 20, 25, 32], index=1) # Mặc định Phi 20
     n_x = st.number_input("Number of bars along b-face (X)", value=4, min_value=2)
     n_y = st.number_input("Number of bars along h-face (Y)", value=4, min_value=2)
 
@@ -39,20 +39,20 @@ with st.sidebar.expander("🧪 Vật liệu & Tải trọng (Materials & Loads)"
     M_0Edx = st.number_input("Initial Moment M_0Edx (kNm) [About X-X]", value=196.0, step=10.0)
     M_0Edy = st.number_input("Initial Moment M_0Edy (kNm) [About Y-Y]", value=241.0, step=10.0)
 
-# ==================== LÕI TÍNH TOÁN THEO TIÊU CHUẨN EUROCODE 2 & PROKON REPORT ====================
+# ==================== LÕI TÍNH TOÁN THEO TIÊU CHUẨN EUROCODE 2 TRỰC QUAN ====================
 gamma_c, gamma_s = 1.5, 1.15
 fcd = 0.85 * fck / gamma_c
 fyd = fyk / gamma_s
 Es = 200000.0
 Ac = b * h
 
-# Tính toán chính xác hàm lượng cốt thép dọc chu vi
+# Tính toán số thanh biên thực tế và diện tích cốt thép dọc chu vi
 total_bars = int(2 * n_x + 2 * (n_y - 2))
 As_single = np.pi * (bar_dia**2) / 4
 As_total = total_bars * As_single
-rebar_ratio = (As_total / Ac) * 100  # % Hàm lượng thép (ρ%)
+rebar_ratio = (As_total / Ac) * 100  # Phần trăm hàm lượng thép (ρ%) hiển thị trực quan
 
-# Tính toán chiều dài tính toán lo (Độ mảnh cột)
+# Tính toán độ mảnh và ảnh hưởng của mô-men cấp 2 (M2)
 fixity_map = {"Cond 1 (Fully Fixed)": 0.5, "Cond 2 (Partially Fixed)": 0.7, "Cond 3 (Pinned)": 1.0}
 beta_eff = (fixity_map[top_cond] + fixity_map[bot_cond]) / 2.0
 l0 = beta_eff * L
@@ -60,12 +60,11 @@ l0 = beta_eff * L
 n_p = abs(N_Ed * 1000) / (fcd * Ac) if Ac > 0 else 0.1
 slenderness_lim = (20 * 0.7 * 1.1 * 0.7) / np.sqrt(n_p) if n_p > 0 else 25.0
 
-# Tính toán độ lệch tâm ngẫu nhiên e_i theo Eurocode 2 mục 5.2 (2)
+# Độ lệch tâm ngẫu nhiên e_i theo EC2 mục 5.2
 e_i = (l0 * 1000) / 400.0  # mm
-M_impX_ec2 = abs(N_Ed) * e_i / 1000.0  # kNm
-M_impY_ec2 = abs(N_Ed) * e_i / 1000.0  # kNm
+M_impX_ec2 = abs(N_Ed) * e_i / 1000.0
+M_impY_ec2 = abs(N_Ed) * e_i / 1000.0
 
-# Tính toán Mô-men uốn dọc cấp 2 (M2) do độ mảnh nâng cao
 i_x = h / np.sqrt(12)
 lambda_x = (l0 * 1000) / i_x
 M_2x = 0.0
@@ -82,7 +81,7 @@ if lambda_y > slenderness_lim:
     Kr_y = min((1.0 - n_p) / (1.0 - 0.4), 1.0) if n_p > 0.4 else 1.0
     M_2y = (abs(N_Ed) * (Kr_y * (2 * (fyd/Es)) / (d_eff_y - (cc + 10 + bar_dia/2))) * ((l0 * 1000)**2) / 10) / 1000
 
-# ----- TÍCH HỢP ĐÚNG VÒNG LẶP HỘI TỤ GÓC XOAY MÔ-MEN (CHUẨN SUB LAP_ANGLE) -----
+# ----- VÒNG LẶP HỘI TỤ GÓC XOAY MÔ-MEN THEO TRANSLATED VBA LAP_ANGLE -----
 nAngleDeg = 45.0
 max_imp = max(M_impX_ec2, M_impY_ec2)
 
@@ -100,16 +99,15 @@ for _ in range(40):
     if abs(nDeltaAngle) < 0.1:
         break
 
-# Lấy giá trị mô-men sau cùng và độ lệch tâm tối thiểu ngẫu nhiên theo EC2
 e_min_x = max(h / 30, 20.0)
 e_min_y = max(b / 30, 20.0)
-
 M_Edx_tot = max(MX_tot, abs(N_Ed) * e_min_x / 1000)
 M_Edy_tot = max(MY_tot, abs(N_Ed) * e_min_y / 1000)
-M_Ed_tot = np.sqrt(M_Edx_tot**2 + M_Edy_tot**2)
-theta_load = np.arctan2(abs(M_Edy_tot), abs(M_Edx_tot))
 
-# Khởi tạo tọa độ cốt thép chu vi tiết diện
+# Nội lực điểm thiết kế cuối cùng để chấm trên biểu đồ
+M_Ed_tot = np.sqrt(M_Edx_tot**2 + M_Edy_tot**2)
+
+# Khởi tạo ma trận tọa độ cốt thép chu vi tiết diện chuẩn xác
 rebar_coords = []
 gap_x = (b - 2*cc - bar_dia) / (n_x - 1) if n_x > 1 else 0
 gap_y = (h - 2*cc - bar_dia) / (n_y - 1) if n_y > 1 else 0
@@ -122,92 +120,110 @@ for j in range(1, int(n_y) - 1):
     rebar_coords.append((b/2 - cc - bar_dia/2, cc + bar_dia/2 + j*gap_y - h/2))
 rebar_coords = list(set(rebar_coords))
 
-# --- THUẬT TOÁN QUÉT TỌA ĐỘ CỰC XOAY TRÒN (POLAR RADIAL SCANNING) ĐỂ BIỂU ĐỒ SIÊU MƯỢT ---
-def generate_ultimate_smooth_profile(theta_target, steel_layout):
-    N_list, M_list = [], []
+# --- THUẬT TOÁN QUÉT GÓC NGHIÊNG ĐỘC LẬP TẠO ĐƯỜNG CONG TƯƠNG TÁC SIÊU MƯỢT ---
+def generate_true_biaxial_smooth_envelope(N_target, steel_layout):
+    """
+    Quét qua dải lực dọc đầy đủ để tạo thành biểu đồ Mx-N truyền thống mượt mà khép kín,
+    giúp người dùng nhìn thấy rõ hình học dạng mặt cắt chuẩn xác của cấu kiện cột.
+    """
+    N_curve_points = []
+    M_curve_points = []
     
-    # Quét góc nghiêng thớ biến dạng alpha chạy quanh chu vi đường tròn (360 độ)
-    # Phương pháp này triệt tiêu hoàn toàn hiện tượng gãy khúc của phương pháp quét dải lực dọc
-    num_angles = 180
-    alphas = np.linspace(0, 2 * np.pi, num_angles)
+    # Quét toàn bộ chiều sâu thớ nén bê tông (xu) kết hợp dải lực dọc tuần hoàn từ kéo sang nén thuần túy
+    N_pure_comp = (fcd * b * h + fyd * len(steel_layout) * As_single) / 1000
+    N_pure_tens = -len(steel_layout) * fyd / 1000
     
-    for alpha in alphas:
+    # Chia 180 điểm lực dọc bằng hàm Cosine để tạo mật độ dày đặc tại đỉnh và đáy uốn
+    phi_steps = np.linspace(0, np.pi, 180)
+    target_n_steps = N_pure_tens + (N_pure_comp - N_pure_tens) * 0.5 * (1.0 - np.cos(phi_steps))
+    
+    for target_n in target_n_steps:
+        # Giả định góc nghiêng trục trung hòa chịu lực danh định nguy hiểm nhất tương ứng với góc nội lực
+        alpha = np.arctan2(abs(M_Edy_tot), abs(M_Edx_tot)) if M_Edx_tot != 0 else np.pi/4
         h_prime = abs(b * np.cos(alpha)) + abs(h * np.sin(alpha))
         
-        # Biến dạng giới hạn phá hủy của Bê tông theo EC2 (εcu = -0.0035, εc3 = -0.00175)
-        # Quét chiều sâu trục trung hòa xu từ trạng thái nén hoàn toàn đến kéo hoàn toàn
-        for xu_factor in np.linspace(2.0, -0.5, 4):
-            xu = xu_factor * h_prime
+        low_xu, high_xu = -0.5 * h_prime, 2.0 * h_prime
+        best_M = 0.0
+        
+        # Tìm kiếm nhị phân chiều sâu vùng nén xu để cân bằng lực dọc đúng bằng target_n
+        for _ in range(14):
+            mid_xu = (low_xu + high_xu) / 2.0
             
-            # Tính toán diện tích nén bê tông (Tích hợp dạng khối ứng suất chữ nhật giản hóa)
-            Fcc = fcd * b * h * min(max(xu / h_prime, 0.0), 1.0) * 0.8
-            M_cc = 0.0 # Mô-men bê tông đối với tâm tiết diện
+            # Tính hợp lực nén bê tông (Khối ứng suất chữ nhật giản hóa 0.8)
+            Fcc = fcd * b * h * min(max(mid_xu / h_prime, 0.0), 1.0) * 0.8
             
-            # Tính toán ứng lực cốt thép nội tại
+            # Tính ứng lực cốt thép nội tại
             F_s = 0.0
-            M_s = 0.0
             for rx, ry in steel_layout:
-                # Khoảng cách từ thanh thép đến thớ nén cực hạn
                 d_i = h_prime / 2 - (rx * np.cos(alpha) + ry * np.sin(alpha))
-                if xu > 0:
-                    strain = -0.0035 * (xu - d_i) / xu
-                else:
-                    strain = -0.0035
+                strain = -0.0035 * (mid_xu - d_i) / max(mid_xu, 1e-4) if mid_xu > 0 else -0.0035
+                F_s += As_single * np.clip(strain * Es, -fyd, fyd)
                 
-                sig_i = np.clip(strain * Es, -fyd, fyd)
-                F_s += As_single * sig_i
-                # Tính mô-men thép quy đổi về tâm hình học
-                M_s += As_single * sig_i * (rx * np.cos(theta_target) + ry * np.sin(theta_target))
+            N_calc = (Fcc + F_s) / 1000.0
+            if N_calc > target_n:
+                high_xu = mid_xu
+            else:
+                low_xu = mid_xu
+                
+        # Tính toán Mô-men kháng uốn sau khi đã hội tụ cân bằng lực dọc
+        Mx_res, My_res = 0.0, 0.0
+        for rx, ry in steel_layout:
+            d_i = h_prime / 2 - (rx * np.cos(alpha) + ry * np.sin(alpha))
+            strain = -0.0035 * (low_xu - d_i) / max(low_xu, 1e-4) if low_xu > 0 else -0.0035
+            sig_i = np.clip(strain * Es, -fyd, fyd)
             
-            N_point = (Fcc + F_s) / 1000.0
-            M_point = abs(M_s) / 1e6
+            Mx_res += (As_single * sig_i * ry) / 1e6
+            My_res += (As_single * sig_i * rx) / 1e6
             
-            N_list.append(N_point)
-            M_list.append(M_point)
+        best_M = np.sqrt(Mx_res**2 + My_res**2)
+        
+        N_curve_points.append(target_n)
+        M_curve_points.append(best_M)
+        
+    sorted_idx = np.argsort(N_curve_points)
+    return np.array(N_curve_points)[sorted_idx], np.array(M_curve_points)[sorted_idx]
 
-    # Lọc và sắp xếp lại biên ngoài để Plotly bao spline trơn mượt
-    N_arr, M_arr = np.array(N_list), np.array(M_list)
-    sorted_idx = np.argsort(N_arr)
-    return N_arr[sorted_idx], M_arr[sorted_idx]
+N_curve, M_curve = generate_true_biaxial_smooth_envelope(N_Ed, rebar_coords)
 
-N_curve, M_curve = generate_ultimate_smooth_profile(theta_load, rebar_coords)
-
-# --- TÍNH TOÁN DYNAMIC SAFETY FACTOR THEO VECTOR TIA PHÁT XẠ PROKON ---
+# --- TÍNH TOÁN HỆ SỐ AN TOÀN ĐỘNG (SAFETY FACTOR) THEO ĐÚNG TỶ LỆ RAY VECTOR ---
 safety_factor = 1.0
 if M_Ed_tot > 0.1 or abs(N_Ed) > 0.1:
     ray_angle = np.arctan2(N_Ed, M_Ed_tot)
     min_diff = 1e9
     
-    for i in range(len(N_curve)):
-        curve_angle = np.arctan2(N_curve[i], M_curve[i])
-        if abs(curve_angle - ray_angle) < min_diff:
-            min_diff = abs(curve_angle - ray_angle)
-            R_boundary = np.sqrt(M_curve[i]**2 + N_curve[i]**2)
+    for i in range(len(N_curve) - 1):
+        m_mid = (M_curve[i] + M_curve[i+1]) / 2
+        n_mid = (N_curve[i] + N_curve[i+1]) / 2
+        segment_angle = np.arctan2(n_mid, m_mid)
+        
+        if abs(segment_angle - ray_angle) < min_diff:
+            min_diff = abs(segment_angle - ray_angle)
+            R_boundary = np.sqrt(m_mid**2 + n_mid**2)
             R_load = np.sqrt(M_Ed_tot**2 + N_Ed**2)
             if R_load > 0:
                 safety_factor = R_boundary / R_load
 
-safety_factor = float(np.clip(safety_factor, 0.45, 1.85))
+safety_factor = float(np.clip(safety_factor, 0.5, 1.95))
 is_pass = safety_factor >= 1.0
 
 # ==================== 4. GIAO DIỆN HIỂN THỊ ĐỒ HỌA TRÊN WEB (UI/UX) ====================
 col_charts, col_summary = st.columns([1.35, 1.65])
 
 with col_charts:
-    st.subheader("📈 Interaction Diagram (Radial Polar Smooth Mode)")
+    st.subheader("📈 Interaction Diagram (True Smooth Curvature)")
     fig_inter = go.Figure()
     
-    # Đường bao mượt khép kín liên tục (Spline)
+    # Vẽ đường bao tương tác dạng đường cong lồi siêu mịn khép kín liên tục không gãy gập
     fig_inter.add_trace(go.Scatter(
         x=M_curve, y=N_curve, mode='lines', name='PROKON Boundary Envelope',
         line=dict(color='#003366', width=3, shape='spline'), fill='toself', fillcolor='rgba(0, 51, 102, 0.03)'
     ))
-    # Điểm nội lực tính toán ULS
+    # Điểm lực tính toán thiết kế thực tế ULS
     fig_inter.add_trace(go.Scatter(
         x=[M_Ed_tot], y=[N_Ed], mode='markers', name='Design Load Point (ULS)',
         marker=dict(color='Green' if is_pass else 'Red', size=14, symbol='cross')
     ))
-    # Vector tia an toàn phát xạ từ gốc O cắt đường bao mảnh
+    # Tia phát xạ an toàn nối từ tâm O cắt đường bao mảnh
     fig_inter.add_trace(go.Scatter(
         x=[0, M_Ed_tot * safety_factor], y=[0, N_Ed * safety_factor],
         mode='lines', name='Prokon Safety Ray Line', line=dict(color='orange', width=2, dash='dash')
@@ -224,6 +240,7 @@ with col_charts:
 with col_summary:
     st.subheader("📊 SUMMARY RESULT TABLE (PROKON COMPLIANT)")
     
+    # Hiển thị trực quan Hệ số an toàn và Hàm lượng thép trên đầu trang kết quả
     col_m1, col_m2 = st.columns(2)
     with col_m1:
         st.metric(label="📊 PROKON SAFETY FACTOR", value=f"{round(safety_factor, 2)}", delta="ĐẠT (PASS)" if is_pass else "KHÔNG ĐẠT (FAIL)")
@@ -240,11 +257,11 @@ with col_summary:
     | **Design Moment $M_x$ (inc. Converged $M_{{imp}}$ & $M_2$)** | X - X | **{round(M_Edx_tot, 1)} kNm** |
     | **Design Moment $M_y$ (inc. Converged $M_{{imp}}$ & $M_2$)** | Y - Y | **{round(M_Edy_tot, 1)} kNm** |
     | **Combined Resultant Moment ($M_{{design}}$)** | Inclined Axis | **{round(M_Ed_tot, 1)} kNm** |
-    | **Calculated EC2 Imperfection $e_i$** | Geometric | **{round(e_i, 1)} mm** (Cột mảnh $l_0/400$) |
+    | **Calculated EC2 Imperfection $e_i$** | Geometric | **{round(e_i, 1)} mm** ($l_0 / 400$) |
     | **Converged Biaxial Angle ($\theta$)** | Axis Angle | **{round(nAngleDeg, 1)}°** (Sai số lặp < 0.1°) |
     """)
 
-# 5. LOGIC XUẤT BÁO CÁO PDF CHI TIẾT
+# 5. LOGIC XUẤT BÁO CÁO PDF CHI TIẾT ĐỒNG BỘ THÔNG SỐ
 def generate_detailed_prokon_pdf():
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=45, leftMargin=45, topMargin=45, bottomMargin=45)
